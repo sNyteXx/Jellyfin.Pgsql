@@ -123,7 +123,9 @@ public class ExcludeFilterController : ControllerBase
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
 
-            // Load only the Genre and Tags values for the fetched items (targeted query)
+            // Load only the Genre and Tags values for the fetched items (targeted query).
+            // Npgsql translates entityIds.Contains(...) to "= ANY(@array)", which is
+            // efficient in PostgreSQL (especially with an index on ItemValuesMap.ItemId).
             var entityIds = entities.Select(e => e.Id).ToArray();
             var itemValues = await context.ItemValuesMap
                 .AsNoTracking()
@@ -169,5 +171,8 @@ public class ExcludeFilterController : ControllerBase
     }
 
     private static string[] NormalizeValues(string[] values)
-        => values.Select(v => v.Trim().ToLowerInvariant()).ToArray();
+        => values
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(v => v.Trim().ToLowerInvariant())
+            .ToArray();
 }
