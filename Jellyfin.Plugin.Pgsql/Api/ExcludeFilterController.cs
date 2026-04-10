@@ -258,7 +258,7 @@ public class ExcludeFilterController : ControllerBase
             }
 
             // If it contains a dot, assume it's already a full type name
-            if (trimmed.Contains('.'))
+            if (trimmed.Contains('.', StringComparison.Ordinal))
             {
                 result.Add(trimmed);
             }
