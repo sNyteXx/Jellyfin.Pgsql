@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -56,7 +57,7 @@ public class ExcludeFilterController : ControllerBase
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>A <see cref="FilteredItemsResult"/> containing the matching items and total count.</returns>
     [HttpGet]
-    [AllowAnonymous]
+    [Authorize]
     [ProducesResponseType(typeof(FilteredItemsResult), StatusCodes.Status200OK)]
     public async Task<ActionResult<FilteredItemsResult>> GetFilteredItemsAsync(
         [FromQuery] Guid? parentId = null,
@@ -87,10 +88,7 @@ public class ExcludeFilterController : ControllerBase
             // Matches against both Tags (type 4) and InheritedTags (type 6).
             if (excludeTags is { Length: > 0 })
             {
-                var cleanTags = excludeTags
-                    .Select(t => t.Trim().ToLowerInvariant())
-                    .ToArray();
-
+                var cleanTags = NormalizeValues(excludeTags);
                 query = query.Where(item => !context.ItemValuesMap.Any(ivm =>
                     ivm.ItemId == item.Id
                     && (ivm.ItemValue.Type == ItemValueType.Tags
@@ -101,10 +99,7 @@ public class ExcludeFilterController : ControllerBase
             // --- Genre exclusion (server-side NOT EXISTS in PostgreSQL) ---
             if (excludeGenres is { Length: > 0 })
             {
-                var cleanGenres = excludeGenres
-                    .Select(g => g.Trim().ToLowerInvariant())
-                    .ToArray();
-
+                var cleanGenres = NormalizeValues(excludeGenres);
                 query = query.Where(item => !context.ItemValuesMap.Any(ivm =>
                     ivm.ItemId == item.Id
                     && ivm.ItemValue.Type == ItemValueType.Genre
@@ -116,19 +111,35 @@ public class ExcludeFilterController : ControllerBase
                 .CountAsync(cancellationToken)
                 .ConfigureAwait(false);
 
-            // Fetch paginated entities and eagerly load their ItemValues for genre/tag mapping
+            // Fetch paginated item IDs ordered by sort name
             var resolvedStartIndex = Math.Max(startIndex ?? 0, 0);
             var resolvedLimit = Math.Min(limit ?? 100, MaxPageSize);
 
             var entities = await query
-                .Include(item => item.ItemValues!)
-                    .ThenInclude(ivm => ivm.ItemValue)
                 .OrderBy(item => item.SortName)
                 .ThenBy(item => item.Name)
                 .Skip(resolvedStartIndex)
                 .Take(resolvedLimit)
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
+
+            // Load only the Genre and Tags values for the fetched items (targeted query)
+            var entityIds = entities.Select(e => e.Id).ToArray();
+            var itemValues = await context.ItemValuesMap
+                .AsNoTracking()
+                .Where(ivm => entityIds.Contains(ivm.ItemId)
+                    && (ivm.ItemValue.Type == ItemValueType.Genre
+                        || ivm.ItemValue.Type == ItemValueType.Tags))
+                .Select(ivm => new { ivm.ItemId, ivm.ItemValue.Type, ivm.ItemValue.Value })
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            var genresByItem = itemValues
+                .Where(v => v.Type == ItemValueType.Genre)
+                .ToLookup(v => v.ItemId, v => v.Value);
+            var tagsByItem = itemValues
+                .Where(v => v.Type == ItemValueType.Tags)
+                .ToLookup(v => v.ItemId, v => v.Value);
 
             // Map to DTOs (in memory, after SQL fetch)
             var items = entities
@@ -143,14 +154,8 @@ public class ExcludeFilterController : ControllerBase
                     CommunityRating = entity.CommunityRating,
                     ProductionYear = entity.ProductionYear,
                     ParentId = entity.ParentId,
-                    Genres = (entity.ItemValues ?? [])
-                        .Where(ivm => ivm.ItemValue.Type == ItemValueType.Genre)
-                        .Select(ivm => ivm.ItemValue.Value)
-                        .ToList(),
-                    Tags = (entity.ItemValues ?? [])
-                        .Where(ivm => ivm.ItemValue.Type == ItemValueType.Tags)
-                        .Select(ivm => ivm.ItemValue.Value)
-                        .ToList()
+                    Genres = genresByItem[entity.Id].ToList(),
+                    Tags = tagsByItem[entity.Id].ToList()
                 })
                 .ToArray();
 
@@ -162,4 +167,7 @@ public class ExcludeFilterController : ControllerBase
             });
         }
     }
+
+    private static string[] NormalizeValues(string[] values)
+        => values.Select(v => v.Trim().ToLowerInvariant()).ToArray();
 }
