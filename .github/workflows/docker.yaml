@@ -1,6 +1,11 @@
 name: '🐋 Build & Publish Docker Image'
 
 on:
+  push:
+    branches:
+      - master
+    paths-ignore:
+      - '**/*.md'
   release:
     types:
       - released
@@ -27,7 +32,7 @@ jobs:
           echo "jellyfin_version=$JELLYFIN_VERSION" >> "$GITHUB_OUTPUT"
 
           # Query existing package versions from GHCR via the GitHub API
-          EXISTING_TAGS=$(gh api /users/jpvenson/packages/container/jellyfin.pgsql/versions \
+          EXISTING_TAGS=$(gh api /users/snytexx/packages/container/jellyfin.pgsql/versions \
             --paginate --jq '.[].metadata.container.tags[]' 2>/dev/null) \
             || { echo "Warning: could not query GHCR tags, defaulting rolling number to 1"; EXISTING_TAGS=""; }
 
@@ -43,11 +48,8 @@ jobs:
           echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
           echo "Computed image tag: $IMAGE_TAG"
 
-          # Build full tag list; include 'latest' on release events
-          TAGS="ghcr.io/jpvenson/jellyfin.pgsql:${IMAGE_TAG}"
-          if [[ "$GITHUB_EVENT_NAME" == "release" ]]; then
-            TAGS="${TAGS}"$'\n'"ghcr.io/jpvenson/jellyfin.pgsql:latest"
-          fi
+          # Build full tag list; always include 'latest'
+          TAGS="ghcr.io/snytexx/jellyfin.pgsql:${IMAGE_TAG}"$'\n'"ghcr.io/snytexx/jellyfin.pgsql:latest"
           # Use a multiline-safe delimiter for the output
           {
             echo "tags<<EOF"
