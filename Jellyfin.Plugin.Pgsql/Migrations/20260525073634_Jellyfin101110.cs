@@ -22,7 +22,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                 type: "character varying(255)",
                 maxLength: 255,
                 nullable: false,
-                defaultValue: "");
+                defaultValue: string.Empty);
 
             migrationBuilder.Sql(
                 """
