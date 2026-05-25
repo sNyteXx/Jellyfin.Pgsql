@@ -4,19 +4,19 @@ This plugin adds postgres SQL support to [Jellyfin Server](https://github.com/je
 
 
 > [!IMPORTANT]
-> Pleae note that there are several additional steps required to make this work and it is to be considered __HIGHLY__ experimental.
+> Please note that there are several additional steps required to make this work and it is to be considered __HIGHLY__ experimental.
 
 # How to use it
 
-You can use your existing Jellyfin compose file and change the image accordingly to: `ghcr.io/jpvenson/jellyfin.pgsql:10.11.10-1`.
+You can use your existing Jellyfin compose file and change the image accordingly to: `ghcr.io/snytexx/jellyfin.pgsql:latest`.
 
-You need to add the connection parameters as enviornment variables in your compose file:
+You need to add the connection parameters as environment variables in your compose file:
 
 ```yaml
 
 services:
   jellyfin:
-    image: ghcr.io/jpvenson/jellyfin.pgsql:10.11.10-1
+    image: ghcr.io/snytexx/jellyfin.pgsql:latest
     volumes:
         - /path/to/config:/config
         - /path/to/cache:/cache
@@ -27,7 +27,7 @@ services:
         - POSTGRES_DB=jellyfin
         - POSTGRES_USER=jellyfin
         - POSTGRES_PASSWORD=jellyfin
-      # Optional settings bellow, uncomment if you want to connect using SSL
+      # Optional settings below, uncomment if you want to connect using SSL
       # - POSTGRES_SSLMODE=Require
       # - POSTGRES_TRUSTSERVERCERTIFICATE=true
 ```
@@ -68,16 +68,48 @@ Then build the container.
 
 Before you deploy an image or plugin build based on Jellyfin 10.11.10, take a full PostgreSQL backup. At minimum, back up the `Users` table and the `__EFMigrationsHistory` table because the upstream 10.11.10 user changes add and populate `NormalizedUsername` and then enforce a new unique index on it.
 
+The migration intentionally does not rename users, delete users, or silently fix collisions. If usernames only differ by case, the migration aborts before creating the `NormalizedUsername` column and before creating the unique index.
+
+For the Unraid deployment this repository is currently used as:
+
+- Template: `/boot/config/plugins/dockerMan/templates-user/my-jellyfin-pgsql.xml`
+- Container: `jellyfin-pgsql`
+- Image: `ghcr.io/snytexx/jellyfin.pgsql:latest`
+- Appdata: `/mnt/user/appdata/jellyfin-pgsql`
+- PostgreSQL connection: `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`
+
 Recommended sequence:
 
 1. Stop Jellyfin so there are no concurrent writes while preparing the upgrade.
-2. Run a full backup, for example `pg_dump --clean --if-exists --file jellyfin-pre-10.11.10.sql "$POSTGRES_DB"`.
-3. Run targeted safety backups as well, for example `CREATE TABLE "Users_Backup_Pre_10_11_10" AS TABLE "Users";` and `CREATE TABLE "__EFMigrationsHistory_Backup_Pre_10_11_10" AS TABLE "__EFMigrationsHistory";`.
-4. Check for case-insensitive username duplicates before applying the upgrade:
+2. Disable Unraid auto-update for `jellyfin-pgsql` until the preflight checks are complete.
+3. Run a full backup from a host/container with PostgreSQL client tools:
+   `PGPASSWORD="$POSTGRES_PASSWORD" pg_dump --host="$POSTGRES_HOST" --port="$POSTGRES_PORT" --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" --clean --if-exists --file "jellyfin-pre-10.11.10-$(date -u +%Y%m%d%H%M%S).sql"`
+4. Run targeted safety backups in the same database:
+   `CREATE TABLE "Users_Backup_Pre_10_11_10" AS TABLE "Users";`
+   `CREATE TABLE "__EFMigrationsHistory_Backup_Pre_10_11_10" AS TABLE "__EFMigrationsHistory";`
+5. Check for case-insensitive username duplicates before applying the upgrade:
    `SELECT UPPER("Username"), COUNT(*) FROM "Users" GROUP BY UPPER("Username") HAVING COUNT(*) > 1;`
-5. Only continue with the upgrade if the duplicate check returns no rows.
-6. Start Jellyfin with the upgraded plugin/image and verify that the migration completed successfully.
-7. Keep the backup tables and dump until login, user rename, and startup flows were validated.
+6. Only continue with the upgrade if the duplicate check returns no rows.
+7. Merge the 10.11.10 branch to `master` and let `.github/workflows/docker.yaml` publish `ghcr.io/snytexx/jellyfin.pgsql:<10.11.10-N>` and `ghcr.io/snytexx/jellyfin.pgsql:latest`.
+8. Update the Unraid Docker container so it pulls the new `latest` image.
+9. Start Jellyfin with the upgraded plugin/image and verify that the migration completed successfully.
+10. Keep the backup tables and dump until login, user rename, and startup flows were validated.
+
+Post-upgrade checks:
+
+```sql
+SELECT COUNT(*) FROM "Users";
+SELECT COUNT(*) FROM "Users" WHERE "NormalizedUsername" IS NULL;
+SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'Users' AND indexname = 'IX_Users_NormalizedUsername';
+SELECT "MigrationId", "ProductVersion" FROM "__EFMigrationsHistory" ORDER BY "MigrationId" DESC LIMIT 5;
+```
+
+Rollback:
+
+1. Stop `jellyfin-pgsql`.
+2. Revert the Unraid template or image selection to the previous known-good image digest/tag.
+3. If the 10.11.10 migration already touched the schema, restore the full pre-upgrade `pg_dump` instead of manually copying individual tables back.
+4. Start Jellyfin on the previous image and confirm login and user data.
 
 # Migration Instructions (ADVANCED, UNTESTED)
 
