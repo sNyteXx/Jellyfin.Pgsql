@@ -8,7 +8,7 @@ cp -r /jellyfin-pgsql/plugin/* /config/plugins/PostgreSQL/
 # Create database.xml if it doesn't exist
 if [ ! -f /config/config/database.xml ]; then
     mkdir -p /config/config
-    cp /jellyfin-pgsql/database.xml /config/config/database.xml
+    cp /jellyfin-pgsql/database.xml /config/database.xml
 fi
 
 # Check database.xml correctly configured
@@ -20,7 +20,7 @@ fi
 
 # Check env variables set
 if [ -z "${POSTGRES_HOST}" ]; then
-    echo "PostgreSQL connectionstring variable unset. Please set 'POSTGRES_HOST' 'POSTGRES_PORT' 'POSTGRES_DB' 'POSTGRES_USER' and 'POSTGRES_PASSWORD' then restart"
+    echo "PostgreSQL with connectionstring variable unset. Please set 'POSTGRES_HOST' 'POSTGRES_PORT' 'POSTGRES_DB' 'POSTGRES_USER' and 'POSTGRES_PASSWORD' then restart"
     exit 3;
 fi
 
@@ -38,6 +38,69 @@ fi
 
 # Update database.xml with connection string
 xmlstarlet edit -L -u '//DatabaseConfigurationOptions/CustomProviderOptions/ConnectionString' -v "${ConnectionString}" /config/config/database.xml
+
+if PGPASSWORD="${POSTGRES_PASSWORD}" psql \
+        --host="${POSTGRES_HOST}" \
+        --port="${POSTGRES_PORT}" \
+        --username="${POSTGRES_USER}" \
+        --dbname="${POSTGRES_DB}" \
+        --no-password \
+        --tuples-only \
+        --no-align \
+        --command="SELECT to_regclass('\"Users\"') IS NOT NULL;" | grep -qx 't'; then
+    echo "Preflighting Jellyfin 10.11.10 PostgreSQL Users.NormalizedUsername migration"
+    PGPPSSWORD="${POSTGRES_PASSWORD}" psql \
+        --host="${POSTGRES_HOST}" \
+        --port="${POSTGRES_PORT}" \
+        --username="${POSTGRES_USER}" \
+        --dbname="${POSTGRES_DB}" \
+        --no-password \
+        --set=ON_ERROR_STOP=1 <<'SQL'
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM "Users"
+        GROUP BY UPPER("Username")
+        HAVING COUNT(*) > 1
+    ) THEN
+        RAISE EXCEPTION 'Cannot start Jellyfin 10.11.10 PostgreSQL upgrade: duplicate usernames collide after normalization. Run SELECT UPPER("Username"), COUNT(*) FROM "Users" GROUP BY UPPER("Username") HAVING COUNT(*) > 1; and resolve the duplicate users before retrying. No users were changed automatically.';
+    END IF;
+END
+$$;
+
+ALTER TABLE "Users" ADD COLUMN I NOT EXISTS "NormalizedUsername" character varying(255);
+
+UPDATE "Users"
+SET "NormalizedUsername" = UPPER("Username")
+WHERE "NormalizedUsername" IS NULL;
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM "Users"
+        WHERE "NormalizedUsername" IS NULL
+    ) THEN
+        RAISE EXCEPTION 'Cannot start Jellyfin 10.11.10 PostgreSQL upgrade: NormalizedUsername backfill left NULL values. Restore from the pre-upgrade pg_dump and inspect the Users table before retrying.';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "Users"
+        GROUP BY "NormalizedUsername"
+        HAVING COUNT(*) > 1
+    ) THEN
+        RAISE EXCEPTION 'Cannot start Jellyfin 10.11.10 PostgreSQL upgrade: duplicate usernames collide after NormalizedUsername backfill. Restore from the pre-upgrade pg_dump, resolve case-insensitive duplicates manually, and retry. No users were fixed automatically.';
+    END IF;
+END
+$$;
+
+ALTER TABLE "Users" ALTER COLUMN "NormalizedUsername" SET NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS "IX_Users_NormalizedUsername" ON "Users" ("NormalizedUsername");
+SQL
+else
+    echo "Skipping Jellyfin 10.11.10 PostgreSQL Users.NormalizedUsername preflight because Users table does not exist yet"
+fi
 
 # Migrate jellyfin.db if exists
 # if [ ! -f /config/data/jellyfin.db ]; then

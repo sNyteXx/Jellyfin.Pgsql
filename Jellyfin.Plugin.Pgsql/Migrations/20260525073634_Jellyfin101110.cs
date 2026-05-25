@@ -24,24 +24,13 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     END IF;
                 END
                 $$;
-                """);
 
-            migrationBuilder.AddColumn<string>(
-                name: "NormalizedUsername",
-                table: "Users",
-                type: "character varying(255)",
-                maxLength: 255,
-                nullable: true);
+                ALTER TABLE "Users" ADD COLUMN IF NOT EXISTS "NormalizedUsername" character varying(255);
 
-            migrationBuilder.Sql(
-                """
                 UPDATE "Users"
                 SET "NormalizedUsername" = UPPER("Username")
                 WHERE "NormalizedUsername" IS NULL;
-                """);
 
-            migrationBuilder.Sql(
-                """
                 DO $$
                 BEGIN
                     IF EXISTS (
@@ -61,36 +50,21 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     END IF;
                 END
                 $$;
+
+                ALTER TABLE "Users" ALTER COLUMN "NormalizedUsername" SET NOT NULL;
+
+                CREATE UNIQUE INDEX IF NOT EXISTS "IX_Users_NormalizedUsername" ON "Users" ("NormalizedUsername");
                 """);
-
-            migrationBuilder.AlterColumn<string>(
-                name: "NormalizedUsername",
-                table: "Users",
-                type: "character varying(255)",
-                maxLength: 255,
-                nullable: false,
-                oldClrType: typeof(string),
-                oldType: "character varying(255)",
-                oldMaxLength: 255,
-                oldNullable: true);
-
-            migrationBuilder.CreateIndex(
-                name: "IX_Users_NormalizedUsername",
-                table: "Users",
-                column: "NormalizedUsername",
-                unique: true);
         }
 
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.DropIndex(
-                name: "IX_Users_NormalizedUsername",
-                table: "Users");
-
-            migrationBuilder.DropColumn(
-                name: "NormalizedUsername",
-                table: "Users");
+            migrationBuilder.Sql(
+                """
+                DROP INDEX IF EXISTS "IX_Users_NormalizedUsername";
+                ALTER TABLE "Users" DROP COLUMN IF EXISTS "NormalizedUsername";
+                """);
         }
     }
 }
