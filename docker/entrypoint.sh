@@ -8,7 +8,7 @@ cp -r /jellyfin-pgsql/plugin/* /config/plugins/PostgreSQL/
 # Create database.xml if it doesn't exist
 if [ ! -f /config/config/database.xml ]; then
     mkdir -p /config/config
-    cp /jellyfin-pgsql/database.xml /config/database.xml
+    cp /jellyfin-pgsql/database.xml /config/config/database.xml
 fi
 
 # Check database.xml correctly configured
@@ -20,7 +20,7 @@ fi
 
 # Check env variables set
 if [ -z "${POSTGRES_HOST}" ]; then
-    echo "PostgreSQL with connectionstring variable unset. Please set 'POSTGRES_HOST' 'POSTGRES_PORT' 'POSTGRES_DB' 'POSTGRES_USER' and 'POSTGRES_PASSWORD' then restart"
+    echo "PostgreSQL connectionstring variable unset. Please set 'POSTGRES_HOST' 'POSTGRES_PORT' 'POSTGRES_DB' 'POSTGRES_USER' and 'POSTGRES_PASSWORD' then restart"
     exit 3;
 fi
 
@@ -49,7 +49,7 @@ if PGPASSWORD="${POSTGRES_PASSWORD}" psql \
         --no-align \
         --command="SELECT to_regclass('\"Users\"') IS NOT NULL;" | grep -qx 't'; then
     echo "Preflighting Jellyfin 10.11.10 PostgreSQL Users.NormalizedUsername migration"
-    PGPPSSWORD="${POSTGRES_PASSWORD}" psql \
+    PGPASSWORD="${POSTGRES_PASSWORD}" psql \
         --host="${POSTGRES_HOST}" \
         --port="${POSTGRES_PORT}" \
         --username="${POSTGRES_USER}" \
@@ -69,7 +69,7 @@ BEGIN
 END
 $$;
 
-ALTER TABLE "Users" ADD COLUMN I NOT EXISTS "NormalizedUsername" character varying(255);
+ALTER TABLE "Users" ADD COLUMN IF NOT EXISTS "NormalizedUsername" character varying(255);
 
 UPDATE "Users"
 SET "NormalizedUsername" = UPPER("Username")
