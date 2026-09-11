@@ -12,6 +12,7 @@ using Jellyfin.Database.Implementations.DbConfiguration;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.Configuration;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 
@@ -53,7 +54,10 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
             .UseNpgsql(connectionBuilder.ToString(), pgSqlOptions =>
             {
                 pgSqlOptions.MigrationsAssembly(GetType().Assembly.FullName);
-            });
+            })
+            .ConfigureWarnings(w => w
+                .Ignore(RelationalEventId.PendingModelChangesWarning)
+                .Ignore(RelationalEventId.MultipleCollectionIncludeWarning));
 
         var enableSensitiveDataLogging = GetCustomDatabaseOption(customOptions, "EnableSensitiveDataLogging", e => e.Equals(bool.TrueString, StringComparison.OrdinalIgnoreCase), () => false);
         if (enableSensitiveDataLogging)
