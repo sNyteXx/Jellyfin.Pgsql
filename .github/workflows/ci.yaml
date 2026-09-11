@@ -103,3 +103,113 @@ jobs:
             echo "Expected Jellyfin 12 rc6 PostgreSQL migration was not applied"
             exit 1
           fi
+
+      - name: Smoke test PostgreSQL upgrade from Jellyfin 10.11.10 to 12.0
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          network="jellyfin-pgsql-upgrade-ci"
+          config_volume="jellyfin-pgsql-upgrade-config"
+          old_tree="/tmp/jellyfin-pgsql-10.11"
+
+          cleanup() {
+            docker rm -f jellyfin-old-ci jellyfin-upgrade-ci postgres-upgrade-ci >/dev/null 2>&1 || true
+            docker volume rm "$config_volume" >/dev/null 2>&1 || true
+            docker network rm "$network" >/dev/null 2>&1 || true
+            git worktree remove --force "$old_tree" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          wait_for_startup() {
+            local container="$1"
+            local logs
+
+            for _ in $(seq 1 90); do
+              logs="$(docker logs "$container" 2>&1 || true)"
+              if grep -q "Startup complete" <<<"$logs"; then
+                return 0
+              fi
+
+              if [ "$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null || echo false)" != "true" ]; then
+                echo "$logs"
+                echo "$container exited before startup completed"
+                return 1
+              fi
+
+              sleep 2
+            done
+
+            docker logs "$container" 2>&1 || true
+            echo "$container did not reach startup complete"
+            return 1
+          }
+
+          git fetch --depth=1 origin master
+          git worktree add --detach "$old_tree" FETCH_HEAD
+          docker build -f "$old_tree/docker/Dockerfile" -t jellyfin-pgsql:10.11.10-ci "$old_tree"
+
+          docker network create "$network"
+          docker volume create "$config_volume"
+
+          docker run -d \
+            --name postgres-upgrade-ci \
+            --network "$network" \
+            -e POSTGRES_DB=jellyfin \
+            -e POSTGRES_USER=jellyfin \
+            -e POSTGRES_PASSWORD=jellyfin \
+            postgres:18
+
+          for _ in $(seq 1 30); do
+            if docker exec postgres-upgrade-ci pg_isready -U jellyfin -d jellyfin >/dev/null 2>&1; then
+              break
+            fi
+            sleep 2
+          done
+          docker exec postgres-upgrade-ci pg_isready -U jellyfin -d jellyfin
+
+          docker run -d \
+            --name jellyfin-old-ci \
+            --network "$network" \
+            -v "$config_volume:/config" \
+            -e POSTGRES_HOST=postgres-upgrade-ci \
+            -e POSTGRES_PORT=5432 \
+            -e POSTGRES_DB=jellyfin \
+            -e POSTGRES_USER=jellyfin \
+            -e POSTGRES_PASSWORD=jellyfin \
+            jellyfin-pgsql:10.11.10-ci
+
+          wait_for_startup jellyfin-old-ci
+
+          old_migration="$(docker exec -e PGPASSWORD=jellyfin postgres-upgrade-ci \
+            psql -U jellyfin -d jellyfin -Atc \
+            "SELECT COUNT(*) FROM \"__EFMigrationsHistory\" WHERE \"MigrationId\" = '20260525073634_Jellyfin101110';")"
+          if [ "$old_migration" != "1" ]; then
+            docker logs jellyfin-old-ci 2>&1 || true
+            echo "Jellyfin 10.11.10 PostgreSQL baseline migration was not applied"
+            exit 1
+          fi
+
+          docker rm -f jellyfin-old-ci
+
+          docker run -d \
+            --name jellyfin-upgrade-ci \
+            --network "$network" \
+            -v "$config_volume:/config" \
+            -e POSTGRES_HOST=postgres-upgrade-ci \
+            -e POSTGRES_PORT=5432 \
+            -e POSTGRES_DB=jellyfin \
+            -e POSTGRES_USER=jellyfin \
+            -e POSTGRES_PASSWORD=jellyfin \
+            jellyfin-pgsql:ci
+
+          wait_for_startup jellyfin-upgrade-ci
+
+          upgraded_migration="$(docker exec -e PGPASSWORD=jellyfin postgres-upgrade-ci \
+            psql -U jellyfin -d jellyfin -Atc \
+            "SELECT COUNT(*) FROM \"__EFMigrationsHistory\" WHERE \"MigrationId\" = '20260827193306_Update_12_0-rc6';")"
+          if [ "$upgraded_migration" != "1" ]; then
+            docker logs jellyfin-upgrade-ci 2>&1 || true
+            echo "Jellyfin 12 rc6 PostgreSQL migration was not applied during the 10.11.10 upgrade"
+            exit 1
+          fi
