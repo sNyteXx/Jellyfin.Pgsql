@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sNyteXx <noreply@github.com>
+Date: Fri, 11 Sep 2026 17:00:00 +0200
+Subject: [PATCH] Fix PostgreSQL active reader in MigrateRatingLevels
+
+Materialize the distinct rating values before issuing ExecuteUpdate calls.
+SQLite permits the previous streaming-reader pattern, while Npgsql rejects a
+second command on the same connection while the DISTINCT query is still open.
+---
+ Jellyfin.Server/Migrations/Routines/20260302090000_MigrateRatingLevels.cs | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Jellyfin.Server/Migrations/Routines/20260302090000_MigrateRatingLevels.cs b/Jellyfin.Server/Migrations/Routines/20260302090000_MigrateRatingLevels.cs
+index ed92c34aa..000000000 100644
+--- a/Jellyfin.Server/Migrations/Routines/20260302090000_MigrateRatingLevels.cs
++++ b/Jellyfin.Server/Migrations/Routines/20260302090000_MigrateRatingLevels.cs
+@@ -40,7 +40,7 @@ internal class MigrateRatingLevels : IDatabaseMigrationRoutine
+         _logger.LogInformation("Recalculating parental rating levels based on rating string.");
+         using var context = _provider.CreateDbContext();
+         using var transaction = context.Database.BeginTransaction();
+-        var ratings = context.BaseItems.AsNoTracking().Select(e => e.OfficialRating).Distinct();
++        var ratings = context.BaseItems.AsNoTracking().Select(e => e.OfficialRating).Distinct().ToList();
+         foreach (var rating in ratings)
+         {
+             if (string.IsNullOrEmpty(rating))
+-- 
+2.51.0
