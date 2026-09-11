@@ -1,76 +1,152 @@
-# The Unofficial Postgre SQL adapter for Jellyfin Server
+# Unofficial PostgreSQL adapter for Jellyfin Server
 
-This plugin adds postgres SQL support to [Jellyfin Server](https://github.com/jellyfin/jellyfin).
-
+This plugin adds PostgreSQL database support to [Jellyfin Server](https://github.com/jellyfin/jellyfin).
 
 > [!IMPORTANT]
-> Please note that there are several additional steps required to make this work and it is to be considered __HIGHLY__ experimental.
+> This is an unofficial and experimental database provider. Always keep a verified PostgreSQL backup before upgrading Jellyfin or this plugin.
 
-# How to use it
+## Current compatibility
 
-You can use your existing Jellyfin compose file and change the image accordingly to: `ghcr.io/snytexx/jellyfin.pgsql:latest`.
+- Jellyfin: 12.0
+- .NET: 10
+- Entity Framework Core: 10
+- PostgreSQL client tooling in the image: 18
+- PostgreSQL provider: Npgsql 10
 
-You need to add the connection parameters as environment variables in your compose file:
+## How to use it
+
+Use the custom image in your existing Jellyfin compose file:
 
 ```yaml
-
 services:
   jellyfin:
     image: ghcr.io/snytexx/jellyfin.pgsql:latest
     volumes:
-        - /path/to/config:/config
-        - /path/to/cache:/cache
-        - /path/to/media:/media
+      - /path/to/config:/config
+      - /path/to/cache:/cache
+      - /path/to/media:/media
     environment:
-        - POSTGRES_HOST=
-        - POSTGRES_PORT=
-        - POSTGRES_DB=jellyfin
-        - POSTGRES_USER=jellyfin
-        - POSTGRES_PASSWORD=jellyfin
-      # Optional settings below, uncomment if you want to connect using SSL
+      - POSTGRES_HOST=
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=jellyfin
+      - POSTGRES_USER=jellyfin
+      - POSTGRES_PASSWORD=jellyfin
+      # Optional SSL settings:
       # - POSTGRES_SSLMODE=Require
       # - POSTGRES_TRUSTSERVERCERTIFICATE=true
 ```
 
-# Build
+The image installs the PostgreSQL plugin into Jellyfin's plugin directory and configures `database.xml` from the environment variables at startup.
 
-Checkout the Jellyfin submodule.
-Use dotnet build to build the plugin.
-Place the plugin in the `plugins` folder of the Jellyfin app.
-Update the `database.xml` file to switch to the plugin as its database provider:
+## Build
+
+Checkout the Jellyfin submodule and build the plugin with .NET 10:
+
+```bash
+git submodule update --init --recursive
+dotnet restore Jellyfin.Plugin.Pgsql.sln
+dotnet build Jellyfin.Plugin.Pgsql.sln -c Release
+```
+
+For a manual plugin setup, configure Jellyfin to use the provider:
 
 ```xml
 <?xml version="1.0" encoding="utf-8"?>
 <DatabaseConfigurationOptions xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
   <DatabaseType>PLUGIN_PROVIDER</DatabaseType>
   <CustomProviderOptions>
-    <PluginAssembly>../../../Jellyfin.Plugin.Pgsql/bin/debug/net9.0/Jellyfin.Plugin.Pgsql.dll</PluginAssembly>
+    <PluginAssembly>../../../Jellyfin.Plugin.Pgsql/bin/Debug/net10.0/Jellyfin.Plugin.Pgsql.dll</PluginAssembly>
     <PluginName>PostgreSQL</PluginName>
     <ConnectionString>CONNECTION_STRING_TO_LOCAL_PGSQL_SERVER</ConnectionString>
   </CustomProviderOptions>
   <LockingBehavior>NoLock</LockingBehavior>
 </DatabaseConfigurationOptions>
-
 ```
 
-Launch your Jellyfin server.
+## Add a migration
 
-# Add migration
-Run `dotnet ef migrations add {MIGRATION_NAME} --project "/workspaces/Jellyfin.Pgsql/Jellyfin.Plugin.Pgsql" -- --migration-provider Jellyfin-PgSql`
+```bash
+dotnet ef migrations add {MIGRATION_NAME} \
+  --project "/workspaces/Jellyfin.Pgsql/Jellyfin.Plugin.Pgsql" \
+  -- --migration-provider Jellyfin-PgSql
+```
 
-# Release flow
+## Release flow
 
-To create a new release, first sync all Jellyfin server changes then create a new migration as seen above. After that create a new efbundle:
-`dotnet ef migrations bundle -o docker/jellyfin.PgsqlMigrator.dll -r linux-x64 --self-contained --project "/workspaces/Jellyfin.Pgsql/Jellyfin.Plugin.Pgsql" --  --migration-provider Jellyfin-PgSql`
-Then build the container.
+Sync the Jellyfin server submodule to the intended release, add the matching PostgreSQL migrations, validate the build and PostgreSQL startup path, then build/publish the container.
 
-# Upgrade precautions for existing PostgreSQL installs
+The repository CI validates:
 
-Before you deploy an image or plugin build based on Jellyfin 10.11.10, take a full PostgreSQL backup. At minimum, back up the `Users` table and the `__EFMigrationsHistory` table because the upstream 10.11.10 user changes add and populate `NormalizedUsername` and then enforce a new unique index on it.
+- .NET 10 restore and Release build
+- Docker image build on the official Jellyfin 12.0 image
+- Fresh Jellyfin 12 startup on PostgreSQL 18
+- PostgreSQL migration completion through the Jellyfin 12 migration set
+- Upgrade from the repository's Jellyfin 10.11.10 PostgreSQL image to Jellyfin 12.0
 
-The migration intentionally does not rename users, delete users, or silently fix collisions. If usernames only differ by case, the migration aborts before creating the `NormalizedUsername` column and before creating the unique index.
+## Upgrade precautions for existing PostgreSQL installs
 
-For the Unraid deployment this repository is currently used as:
+Jellyfin 12 changes the database schema substantially. Treat the PostgreSQL database and the Jellyfin config directory as one rollback unit.
+
+Recommended sequence:
+
+1. Stop Jellyfin so there are no concurrent writes.
+2. Disable automatic image updates until the upgrade has been validated.
+3. Take a full PostgreSQL dump:
+
+   ```bash
+   PGPASSWORD="$POSTGRES_PASSWORD" pg_dump \
+     --host="$POSTGRES_HOST" \
+     --port="$POSTGRES_PORT" \
+     --username="$POSTGRES_USER" \
+     --dbname="$POSTGRES_DB" \
+     --clean --if-exists \
+     --file "jellyfin-pre-12.0-$(date -u +%Y%m%d%H%M%S).sql"
+   ```
+
+4. Back up the Jellyfin `/config` directory as well.
+5. If upgrading from a version before the existing 10.11.10 PostgreSQL migration, check case-insensitive username collisions first:
+
+   ```sql
+   SELECT UPPER("Username"), COUNT(*)
+   FROM "Users"
+   GROUP BY UPPER("Username")
+   HAVING COUNT(*) > 1;
+   ```
+
+6. Pull the Jellyfin 12 PostgreSQL image and start Jellyfin.
+7. Verify successful startup, login, users, libraries, playback and plugin loading.
+8. Keep the pre-upgrade dump and config backup until the installation has been validated.
+
+Useful post-upgrade checks:
+
+```sql
+SELECT COUNT(*) FROM "Users";
+SELECT COUNT(*) FROM "Users" WHERE "NormalizedUsername" IS NULL;
+SELECT indexname, indexdef
+FROM pg_indexes
+WHERE tablename = 'Users'
+  AND indexname = 'IX_Users_NormalizedUsername';
+SELECT "MigrationId", "ProductVersion"
+FROM "__EFMigrationsHistory"
+ORDER BY "MigrationId" DESC
+LIMIT 10;
+```
+
+### Rollback
+
+Do not try to downgrade Jellyfin against a database that has already been migrated to the Jellyfin 12 schema.
+
+1. Stop Jellyfin.
+2. Restore the full pre-12 PostgreSQL dump.
+3. Restore the matching pre-12 Jellyfin `/config` backup if required.
+4. Select the previous known-good image digest/tag.
+5. Start Jellyfin and validate the old installation.
+
+The image's database provider also creates a PostgreSQL backup before Jellyfin applies internal database migrations and attempts an automatic restore if a migration fails. This is an additional safeguard, not a replacement for the external pre-upgrade backup.
+
+## Unraid deployment
+
+This repository is currently used with:
 
 - Template: `/boot/config/plugins/dockerMan/templates-user/my-jellyfin-pgsql.xml`
 - Container: `jellyfin-pgsql`
@@ -78,51 +154,16 @@ For the Unraid deployment this repository is currently used as:
 - Appdata: `/mnt/user/appdata/jellyfin-pgsql`
 - PostgreSQL connection: `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`
 
-Recommended sequence:
+## Migration from SQLite (advanced / experimental)
 
-1. Stop Jellyfin so there are no concurrent writes while preparing the upgrade.
-2. Disable Unraid auto-update for `jellyfin-pgsql` until the preflight checks are complete.
-3. Run a full backup from a host/container with PostgreSQL client tools:
-   `PGPASSWORD="$POSTGRES_PASSWORD" pg_dump --host="$POSTGRES_HOST" --port="$POSTGRES_PORT" --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" --clean --if-exists --file "jellyfin-pre-10.11.10-$(date -u +%Y%m%d%H%M%S).sql"`
-4. Run targeted safety backups in the same database:
-   `CREATE TABLE "Users_Backup_Pre_10_11_10" AS TABLE "Users";`
-   `CREATE TABLE "__EFMigrationsHistory_Backup_Pre_10_11_10" AS TABLE "__EFMigrationsHistory";`
-5. Check for case-insensitive username duplicates before applying the upgrade:
-   `SELECT UPPER("Username"), COUNT(*) FROM "Users" GROUP BY UPPER("Username") HAVING COUNT(*) > 1;`
-6. Only continue with the upgrade if the duplicate check returns no rows.
-7. Merge the 10.11.10 branch to `master` and let `.github/workflows/docker.yaml` publish `ghcr.io/snytexx/jellyfin.pgsql:<10.11.10-N>` and `ghcr.io/snytexx/jellyfin.pgsql:latest`.
-8. Update the Unraid Docker container so it pulls the new `latest` image.
-9. Start Jellyfin with the upgraded plugin/image and verify that the migration completed successfully.
-10. Keep the backup tables and dump until login, user rename, and startup flows were validated.
+To migrate an existing SQLite-backed Jellyfin instance to PostgreSQL:
 
-Post-upgrade checks:
+1. Start the Jellyfin PostgreSQL image against an empty PostgreSQL database and an empty config directory.
+2. Let Jellyfin initialize the schema and migration history, then stop it.
+3. Install `pgloader`.
+4. Adapt [`docker/jellyfindb.load`](/docker/jellyfindb.load) to the old `jellyfin.db` and the PostgreSQL instance.
+5. Run `pgloader /jellyfin-pgsql/jellyfindb.load`.
+6. Restore the remaining Jellyfin data/config files as required.
+7. Start Jellyfin and validate the migrated instance.
 
-```sql
-SELECT COUNT(*) FROM "Users";
-SELECT COUNT(*) FROM "Users" WHERE "NormalizedUsername" IS NULL;
-SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'Users' AND indexname = 'IX_Users_NormalizedUsername';
-SELECT "MigrationId", "ProductVersion" FROM "__EFMigrationsHistory" ORDER BY "MigrationId" DESC LIMIT 5;
-```
-
-Rollback:
-
-1. Stop `jellyfin-pgsql`.
-2. Revert the Unraid template or image selection to the previous known-good image digest/tag.
-3. If the 10.11.10 migration already touched the schema, restore the full pre-upgrade `pg_dump` instead of manually copying individual tables back.
-4. Start Jellyfin on the previous image and confirm login and user data.
-
-# Migration Instructions (ADVANCED, UNTESTED)
-
-To migrate your existing Jellyfin instance to a custom database (not using the docker image) follow the steps IN THIS ORDER.
-
-1. Download the Jellyfin PGSQL container and configure it to point to an existing empty database and empty config directory. DO NOT USE YOUR EXISTING DATA OR SQLITE LIBRARY CONFIGURE A FULLY CLEAR INSTANCE.
-2. Run Jellyfin once with it configured to your empty database, this will seed the database and its migration history.
-3. Stop your Jellyfin instance after it has been started once (no need to fully configure it via the setup wizard). If you did not get the setup wizard then you did something wrong!
-4. Install the pgloader tool `apt install pgloader` or see https://pgloader.readthedocs.io/en/latest/install.html.
-5. Download the [jellyfindb.load](/docker/jellyfindb.load) file
-6. Adapt the `jellyfindb.load` file accordingly to point towards your old jellyfin.db and your postgres instance. See https://pgloader.readthedocs.io/en/latest/ref/sqlite.html
-7. Use the load file in `jellyfindb.load` to transfer your sqlite db into the postgres db like `pgloader /jellyfin-pgsql/jellyfindb.load`.
-8. Move your old Data back to the Jellyfin directories
-9. Start Jellyfin
-
-If you get an error regarding a missing `__EFMigrationsHistory` you did not start Jellyfin with a clear state.
+If `__EFMigrationsHistory` is missing, the PostgreSQL target was not initialized with a clean Jellyfin PostgreSQL instance first.
