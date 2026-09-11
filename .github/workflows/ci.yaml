@@ -1,0 +1,33 @@
+name: 'CI'
+
+on:
+  pull_request:
+    branches:
+      - master
+  push:
+    branches:
+      - 'upgrade/**'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore Jellyfin.Plugin.Pgsql.sln
+
+      - name: Build
+        run: dotnet build Jellyfin.Plugin.Pgsql.sln -c Release --no-restore
+
+      - name: Build Docker image
+        run: docker build -f docker/Dockerfile -t jellyfin-pgsql:ci .
