@@ -1,0 +1,10 @@
+# EF Core migrations are generated-style infrastructure and intentionally keep
+# migration identifiers/names that do not follow normal API naming conventions.
+[Migrations/*.cs]
+dotnet_diagnostic.CA1707.severity = none
+dotnet_diagnostic.SA1601.severity = none
+dotnet_diagnostic.CS1591.severity = none
+
+# CA1873 is new analyzer churn under .NET 10 for existing structured logging calls.
+[Database/PgSqlDatabaseProvider.cs]
+dotnet_diagnostic.CA1873.severity = none
