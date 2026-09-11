@@ -31,3 +31,75 @@ jobs:
 
       - name: Build Docker image
         run: docker build -f docker/Dockerfile -t jellyfin-pgsql:ci .
+
+      - name: Smoke test Jellyfin 12 with PostgreSQL 18
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          network="jellyfin-pgsql-ci"
+          docker network create "$network"
+
+          cleanup() {
+            docker rm -f jellyfin-ci postgres-ci >/dev/null 2>&1 || true
+            docker network rm "$network" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          docker run -d \
+            --name postgres-ci \
+            --network "$network" \
+            -e POSTGRES_DB=jellyfin \
+            -e POSTGRES_USER=jellyfin \
+            -e POSTGRES_PASSWORD=jellyfin \
+            postgres:18
+
+          for _ in $(seq 1 30); do
+            if docker exec postgres-ci pg_isready -U jellyfin -d jellyfin >/dev/null 2>&1; then
+              break
+            fi
+            sleep 2
+          done
+          docker exec postgres-ci pg_isready -U jellyfin -d jellyfin
+
+          docker run -d \
+            --name jellyfin-ci \
+            --network "$network" \
+            -e POSTGRES_HOST=postgres-ci \
+            -e POSTGRES_PORT=5432 \
+            -e POSTGRES_DB=jellyfin \
+            -e POSTGRES_USER=jellyfin \
+            -e POSTGRES_PASSWORD=jellyfin \
+            jellyfin-pgsql:ci
+
+          for _ in $(seq 1 60); do
+            logs="$(docker logs jellyfin-ci 2>&1 || true)"
+            if grep -q "Startup complete" <<<"$logs"; then
+              break
+            fi
+
+            if [ "$(docker inspect -f '{{.State.Running}}' jellyfin-ci 2>/dev/null || echo false)" != "true" ]; then
+              echo "$logs"
+              echo "Jellyfin exited before startup completed"
+              exit 1
+            fi
+
+            sleep 2
+          done
+
+          logs="$(docker logs jellyfin-ci 2>&1 || true)"
+          if ! grep -q "Startup complete" <<<"$logs"; then
+            echo "$logs"
+            echo "Jellyfin did not reach startup complete"
+            exit 1
+          fi
+
+          applied="$(docker exec -e PGPASSWORD=jellyfin postgres-ci \
+            psql -U jellyfin -d jellyfin -Atc \
+            "SELECT COUNT(*) FROM \"__EFMigrationsHistory\" WHERE \"MigrationId\" = '20260827193306_Update_12_0-rc6';")"
+
+          if [ "$applied" != "1" ]; then
+            echo "$logs"
+            echo "Expected Jellyfin 12 rc6 PostgreSQL migration was not applied"
+            exit 1
+          fi
