@@ -225,6 +225,20 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                 table: "LinkedChildren",
                 columns: new[] { "ParentId", "SortOrder" });
 
+            // Match Jellyfin 12's SQLite migration semantics: orphaned owner links are
+            // attached to the placeholder BaseItem before enforcing referential integrity.
+            migrationBuilder.Sql(
+                """
+                UPDATE "BaseItems" AS item
+                SET "OwnerId" = '00000000-0000-0000-0000-000000000001'::uuid
+                WHERE item."OwnerId" IS NOT NULL
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM "BaseItems" AS owner
+                    WHERE owner."Id" = item."OwnerId"
+                  );
+                """);
+
             migrationBuilder.AddForeignKey(
                 name: "FK_BaseItems_BaseItems_OwnerId",
                 table: "BaseItems",
