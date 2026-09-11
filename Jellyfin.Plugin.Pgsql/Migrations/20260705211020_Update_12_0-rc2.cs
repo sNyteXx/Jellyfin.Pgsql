@@ -100,12 +100,10 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                         principalColumn: "Id");
                 });
 
-            migrationBuilder.UpdateData(
-                table: "BaseItems",
-                keyColumn: "Id",
-                keyValue: new Guid("00000000-0000-0000-0000-000000000001"),
-                columns: new[] { "Name", "OwnerId", "PrimaryVersionId" },
-                values: new object[] { "This is a placeholder item for UserData that has been detached from its original item", null, null });
+            // EF Core 10 cannot generate UpdateData SQL here without the old BaseItems
+            // entity mapping. Use explicit PostgreSQL SQL for this single seed-row update.
+            migrationBuilder.Sql(
+                @"UPDATE ""BaseItems"" SET ""Name"" = 'This is a placeholder item for UserData that has been detached from its original item', ""OwnerId"" = NULL, ""PrimaryVersionId"" = NULL WHERE ""Id"" = '00000000-0000-0000-0000-000000000001'::uuid;");
 
             migrationBuilder.CreateIndex(
                 name: "IX_UserData_UserId_IsFavorite_ItemId",
@@ -339,12 +337,8 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
             migrationBuilder.Sql(
                 @"ALTER TABLE ""BaseItems"" ALTER COLUMN ""OwnerId"" TYPE text USING ""OwnerId""::text;");
 
-            migrationBuilder.UpdateData(
-                table: "BaseItems",
-                keyColumn: "Id",
-                keyValue: new Guid("00000000-0000-0000-0000-000000000001"),
-                columns: new[] { "Name", "OwnerId", "PrimaryVersionId" },
-                values: new object[] { "This is a placeholder item for UserData that has been detacted from its original item", null, null });
+            migrationBuilder.Sql(
+                @"UPDATE ""BaseItems"" SET ""Name"" = 'This is a placeholder item for UserData that has been detacted from its original item', ""OwnerId"" = NULL, ""PrimaryVersionId"" = NULL WHERE ""Id"" = '00000000-0000-0000-0000-000000000001'::uuid;");
 
             migrationBuilder.CreateIndex(
                 name: "IX_UserData_UserId",
