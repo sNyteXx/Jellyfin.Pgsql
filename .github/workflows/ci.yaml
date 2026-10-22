@@ -190,10 +190,10 @@ jobs:
 
           # An authenticated query proves the preserved custom controller and tag
           # exclusion execute through Npgsql, rather than merely loading the DLL.
-          curl --fail --silent --get "$base_url/Items/Filtered" \
-            -H "X-Emby-Token: $api_token" --data-urlencode includeItemTypes=Movie \
+          curl --fail --silent --show-error --get "$base_url/Items/Filtered" \
+            -H "Authorization: MediaBrowser Token=\"$api_token\"" --data-urlencode includeItemTypes=Movie \
             | jq -e '.TotalRecordCount == 1 and .Items[0].Name == "CI preserved movie" and .Items[0].Tags == ["ci-hidden"]'
-          curl --fail --silent --get "$base_url/Items/Filtered" \
-            -H "X-Emby-Token: $api_token" --data-urlencode includeItemTypes=Movie \
+          curl --fail --silent --show-error --get "$base_url/Items/Filtered" \
+            -H "Authorization: MediaBrowser Token=\"$api_token\"" --data-urlencode includeItemTypes=Movie \
             --data-urlencode excludeTags=ci-hidden \
             | jq -e '.TotalRecordCount == 0 and (.Items | length) == 0'
