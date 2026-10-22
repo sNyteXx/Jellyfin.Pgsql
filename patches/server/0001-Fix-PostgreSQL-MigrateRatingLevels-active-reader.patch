@@ -1,8 +1,7 @@
 diff --git a/Jellyfin.Server/Migrations/Routines/20260915120000_MigrateRatingLevels.cs b/Jellyfin.Server/Migrations/Routines/20260915120000_MigrateRatingLevels.cs
 --- a/Jellyfin.Server/Migrations/Routines/20260915120000_MigrateRatingLevels.cs
 +++ b/Jellyfin.Server/Migrations/Routines/20260915120000_MigrateRatingLevels.cs
-@@ -35,8 +35,16 @@
-     {
+@@ -36,6 +36,14 @@
          _logger.LogInformation("Recalculating parental rating levels based on rating string.");
          using var context = _provider.CreateDbContext();
 +        if (context.Database.ProviderName == "Npgsql.EntityFrameworkCore.PostgreSQL")
@@ -18,9 +17,7 @@ diff --git a/Jellyfin.Server/Migrations/Routines/20260915120000_MigrateRatingLev
 +        var ratings = context.BaseItems.AsNoTracking().Select(e => e.OfficialRating).Distinct().ToList();
          foreach (var rating in ratings)
          {
-             if (string.IsNullOrEmpty(rating))
-@@ -44,10 +52,10 @@
-                 int? value = null;
+@@ -45,8 +53,8 @@
                  context.BaseItems
                      .Where(e => e.OfficialRating == null || e.OfficialRating == string.Empty)
 -                    .ExecuteUpdate(f => f.SetProperty(e => e.InheritedParentalRatingValue, value));
@@ -33,9 +30,7 @@ diff --git a/Jellyfin.Server/Migrations/Routines/20260915120000_MigrateRatingLev
 +                        .SetProperty(e => e.InheritedParentalRatingSubValue, value));
              }
              else
-             {
-@@ -56,9 +64,14 @@
-                 var subScore = ratingValue?.SubScore;
+@@ -57,8 +65,13 @@
                  context.BaseItems
                      .Where(e => e.OfficialRating == rating)
 -                    .ExecuteUpdate(f => f.SetProperty(e => e.InheritedParentalRatingValue, score));
