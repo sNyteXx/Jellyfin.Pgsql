@@ -1,0 +1,39 @@
+--- a/Jellyfin.Server/Migrations/Routines/20260911120000_StripEmbeddedLinkedChildren.cs
++++ b/Jellyfin.Server/Migrations/Routines/20260911120000_StripEmbeddedLinkedChildren.cs
+@@ -26,10 +26,22 @@
+     {
+         using var context = _dbProvider.CreateDbContext();
+ 
+-        // json_valid guards the rare malformed blob: json_remove would abort the statement on it,
+-        // and one bad row must not cost every other row the fix.
+-        var updated = context.Database.ExecuteSqlRaw(
+-            """
++        // PostgreSQL stores this blob as text. Guard every jsonb cast: a malformed blob,
++        // a JSON number outside PostgreSQL's range, or a duplicate key must remain intact.
++        // Only the three obsolete top-level keys are removed from valid JSON objects.
++        // The CASE expression keeps PostgreSQL's planner from evaluating a cast before its guard.
++        var sql = context.Database.ProviderName == "Npgsql.EntityFrameworkCore.PostgreSQL"
++            ? """
++              UPDATE "BaseItems"
++              SET "Data" = ("Data"::jsonb - ARRAY['LinkedChildren', 'ExtraIds', 'SupportsExternalTransfer'])::text
++              WHERE CASE
++                  WHEN "Data" IS JSON OBJECT WITH UNIQUE KEYS
++                    AND pg_input_is_valid("Data", 'jsonb')
++                  THEN "Data"::jsonb ?| ARRAY['LinkedChildren', 'ExtraIds', 'SupportsExternalTransfer']
++                  ELSE false
++              END
++              """
++            : """
+             UPDATE "BaseItems"
+             SET "Data" = json_remove("Data", '$.LinkedChildren', '$.ExtraIds', '$.SupportsExternalTransfer')
+             WHERE "Data" IS NOT NULL
+@@ -37,7 +49,8 @@
+               AND ("Data" LIKE '%"LinkedChildren"%'
+                 OR "Data" LIKE '%"ExtraIds"%'
+                 OR "Data" LIKE '%"SupportsExternalTransfer"%')
+-            """);
++            """;
++        var updated = context.Database.ExecuteSqlRaw(sql);
+ 
+         _logger.LogInformation("Dropped dead keys from the serialized data of {Count} items", updated);
+     }

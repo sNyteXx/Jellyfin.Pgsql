@@ -5,15 +5,24 @@ on:
     types:
       - released
   workflow_dispatch:
+    inputs:
+      version:
+        description: Plugin version to publish
+        required: true
+        type: string
+      is-unstable:
+        description: Publish as an unstable version
+        default: false
+        type: boolean
 
 jobs:
   call:
     uses: jellyfin/jellyfin-meta-plugins/.github/workflows/publish.yaml@master
     with:
-      version: ${{ github.event.release.tag_name }}
-      is-unstable: ${{ github.event.release.prerelease }}
-      dotnet-version: "9.0.x"
-      dotnet-target: "net9.0"
+      version: ${{ github.event.release.tag_name || inputs.version }}
+      is-unstable: ${{ github.event.release.prerelease || inputs.is-unstable || false }}
+      dotnet-version: "10.0.x"
+      dotnet-target: "net10.0"
     secrets:
       deploy-host: ${{ secrets.DEPLOY_HOST }}
       deploy-user: ${{ secrets.DEPLOY_USER }}
