@@ -1,12 +1,55 @@
 diff --git a/Jellyfin.Server/Migrations/Routines/20260915120000_MigrateRatingLevels.cs b/Jellyfin.Server/Migrations/Routines/20260915120000_MigrateRatingLevels.cs
 --- a/Jellyfin.Server/Migrations/Routines/20260915120000_MigrateRatingLevels.cs
 +++ b/Jellyfin.Server/Migrations/Routines/20260915120000_MigrateRatingLevels.cs
-@@ -36,7 +36,7 @@ internal class MigrateRatingLevels : IDatabaseMigrationRoutine
+@@ -35,8 +35,16 @@
+     {
          _logger.LogInformation("Recalculating parental rating levels based on rating string.");
          using var context = _provider.CreateDbContext();
++        if (context.Database.ProviderName == "Npgsql.EntityFrameworkCore.PostgreSQL")
++        {
++            // This one-time migration can touch a large library. Keep the longer
++            // timeout scoped to this context rather than changing normal queries.
++            context.Database.SetCommandTimeout(300);
++        }
++
          using var transaction = context.Database.BeginTransaction();
 -        var ratings = context.BaseItems.AsNoTracking().Select(e => e.OfficialRating).Distinct();
++        // Materialize before updating so Npgsql has no active reader on the connection.
 +        var ratings = context.BaseItems.AsNoTracking().Select(e => e.OfficialRating).Distinct().ToList();
          foreach (var rating in ratings)
          {
              if (string.IsNullOrEmpty(rating))
+@@ -44,10 +52,10 @@
+                 int? value = null;
+                 context.BaseItems
+                     .Where(e => e.OfficialRating == null || e.OfficialRating == string.Empty)
+-                    .ExecuteUpdate(f => f.SetProperty(e => e.InheritedParentalRatingValue, value));
+-                context.BaseItems
+-                    .Where(e => e.OfficialRating == null || e.OfficialRating == string.Empty)
+-                    .ExecuteUpdate(f => f.SetProperty(e => e.InheritedParentalRatingSubValue, value));
++                    .Where(e => e.InheritedParentalRatingValue.HasValue || e.InheritedParentalRatingSubValue.HasValue)
++                    .ExecuteUpdate(f => f
++                        .SetProperty(e => e.InheritedParentalRatingValue, value)
++                        .SetProperty(e => e.InheritedParentalRatingSubValue, value));
+             }
+             else
+             {
+@@ -56,9 +64,14 @@
+                 var subScore = ratingValue?.SubScore;
+                 context.BaseItems
+                     .Where(e => e.OfficialRating == rating)
+-                    .ExecuteUpdate(f => f.SetProperty(e => e.InheritedParentalRatingValue, score));
+-                context.BaseItems
+-                    .Where(e => e.OfficialRating == rating)
+-                    .ExecuteUpdate(f => f.SetProperty(e => e.InheritedParentalRatingSubValue, subScore));
++                    .Where(e => (score.HasValue
++                            ? !e.InheritedParentalRatingValue.HasValue || e.InheritedParentalRatingValue != score
++                            : e.InheritedParentalRatingValue.HasValue)
++                        || (subScore.HasValue
++                            ? !e.InheritedParentalRatingSubValue.HasValue || e.InheritedParentalRatingSubValue != subScore
++                            : e.InheritedParentalRatingSubValue.HasValue))
++                    .ExecuteUpdate(f => f
++                        .SetProperty(e => e.InheritedParentalRatingValue, score)
++                        .SetProperty(e => e.InheritedParentalRatingSubValue, subScore));
+             }
+         }

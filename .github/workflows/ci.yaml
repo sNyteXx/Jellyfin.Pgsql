@@ -98,7 +98,7 @@ jobs:
               if [ "$(docker inspect -f '{{.State.Running}}' jellyfin-ci)" != true ]; then
                 return 1
               fi
-              if docker logs jellyfin-ci 2>&1 | rg 'Startup complete' >/dev/null && \
+              if docker logs jellyfin-ci 2>&1 | grep -F 'Startup complete' >/dev/null && \
                   curl --fail --silent "$base_url/System/Info/Public" \
                     | jq -e --arg version "$expected_version" '.Version == $version' >/dev/null; then
                 return 0
