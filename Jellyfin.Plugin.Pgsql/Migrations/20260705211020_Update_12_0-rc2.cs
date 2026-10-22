@@ -70,6 +70,14 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                 nullable: false,
                 defaultValue: false);
 
+            // Match Jellyfin 12 SQLite semantics before converting legacy text GUIDs.
+            // Guid.Empty and the detached UserData placeholder mean "no owner/version", not a real relationship.
+            migrationBuilder.Sql(
+                @"UPDATE ""BaseItems"" SET ""PrimaryVersionId"" = NULL WHERE BTRIM(""PrimaryVersionId"") = '00000000-0000-0000-0000-000000000000';");
+
+            migrationBuilder.Sql(
+                @"UPDATE ""BaseItems"" SET ""OwnerId"" = NULL WHERE BTRIM(""OwnerId"") IN ('00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000001');");
+
             migrationBuilder.Sql(
                 @"ALTER TABLE ""BaseItems"" ALTER COLUMN ""PrimaryVersionId"" TYPE uuid USING CASE WHEN ""PrimaryVersionId"" IS NULL OR BTRIM(""PrimaryVersionId"") = '' THEN NULL ELSE ""PrimaryVersionId""::uuid END;");
 

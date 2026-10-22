@@ -39,6 +39,81 @@ fi
 # Update database.xml with connection string
 xmlstarlet edit -L -u '//DatabaseConfigurationOptions/CustomProviderOptions/ConnectionString' -v "${ConnectionString}" /config/config/database.xml
 
+# PostgreSQL may start after this container (for example after an Unraid or
+# database-container restart). Wait for it instead of crash-looping Jellyfin.
+POSTGRES_STARTUP_TIMEOUT_SECONDS="${POSTGRES_STARTUP_TIMEOUT_SECONDS:-180}"
+echo "Waiting for PostgreSQL at ${POSTGRES_HOST}:${POSTGRES_PORT} (timeout: ${POSTGRES_STARTUP_TIMEOUT_SECONDS}s)"
+postgres_deadline=$((SECONDS + POSTGRES_STARTUP_TIMEOUT_SECONDS))
+until PGPASSWORD="${POSTGRES_PASSWORD}" pg_isready \
+    --host="${POSTGRES_HOST}" \
+    --port="${POSTGRES_PORT}" \
+    --username="${POSTGRES_USER}" \
+    --dbname="${POSTGRES_DB}" >/dev/null 2>&1; do
+    if (( SECONDS >= postgres_deadline )); then
+        echo "PostgreSQL did not become ready within ${POSTGRES_STARTUP_TIMEOUT_SECONDS}s. abort." >&2
+        exit 4
+    fi
+    sleep 2
+done
+echo "PostgreSQL is ready"
+# Jellyfin 12 generates MIN/MAX queries for UUID columns. PostgreSQL does not
+# provide min(uuid)/max(uuid) aggregates by default, so make the compatibility
+# layer part of container startup instead of requiring a manual database fix.
+echo "Ensuring PostgreSQL UUID MIN/MAX compatibility for Jellyfin 12"
+PGPASSWORD="${POSTGRES_PASSWORD}" psql \
+    --host="${POSTGRES_HOST}" \
+    --port="${POSTGRES_PORT}" \
+    --username="${POSTGRES_USER}" \
+    --dbname="${POSTGRES_DB}" \
+    --no-password \
+    --set=ON_ERROR_STOP=1 <<'SQL'
+CREATE OR REPLACE FUNCTION public.jellyfin_uuid_min_state(uuid, uuid)
+RETURNS uuid
+LANGUAGE sql
+IMMUTABLE
+STRICT
+PARALLEL SAFE
+AS 'SELECT CASE WHEN $1 < $2 THEN $1 ELSE $2 END';
+
+CREATE OR REPLACE FUNCTION public.jellyfin_uuid_max_state(uuid, uuid)
+RETURNS uuid
+LANGUAGE sql
+IMMUTABLE
+STRICT
+PARALLEL SAFE
+AS 'SELECT CASE WHEN $1 > $2 THEN $1 ELSE $2 END';
+
+DO $do$
+BEGIN
+    IF to_regprocedure('public.min(uuid)') IS NULL THEN
+        EXECUTE $sql$
+            CREATE AGGREGATE public.min(uuid) (
+                SFUNC = public.jellyfin_uuid_min_state,
+                STYPE = uuid,
+                COMBINEFUNC = public.jellyfin_uuid_min_state,
+                PARALLEL = SAFE
+            )
+        $sql$;
+    END IF;
+
+    IF to_regprocedure('public.max(uuid)') IS NULL THEN
+        EXECUTE $sql$
+            CREATE AGGREGATE public.max(uuid) (
+                SFUNC = public.jellyfin_uuid_max_state,
+                STYPE = uuid,
+                COMBINEFUNC = public.jellyfin_uuid_max_state,
+                PARALLEL = SAFE
+            )
+        $sql$;
+    END IF;
+END
+$do$;
+SQL
+if [ $? -ne 0 ]; then
+    echo "Failed to ensure PostgreSQL UUID MIN/MAX compatibility. abort." >&2
+    exit 5
+fi
+
 if PGPASSWORD="${POSTGRES_PASSWORD}" psql \
         --host="${POSTGRES_HOST}" \
         --port="${POSTGRES_PORT}" \
